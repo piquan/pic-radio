@@ -33,6 +33,91 @@ RST_VEC CODE    0x0000
 ; The ISR is at 0x0004, but we don't actually use it.
 ; The 16Fxxxx devices don't need any context saving, BTW.
 ISR_VEC CODE    0x0004
+	BANKSEL PIR1
+        BTFSS   PIR1, TMR1IF
+        GOTO    ISR_VEC_MODTIM_END
+        ;; Clear the interrupt bit
+        BCF     PIR1, TMR1IF
+        ;; Toggle the OSCTUNE bit
+        MOVLW   1
+        BANKSEL OSCTUNE
+        XORWF   OSCTUNE, F
+        ;; Toggle the debugging port
+	BANKSEL	LATC
+	MOVLW	4
+        XORWF	LATC, F
+        ;; Disable timer1
+        BANKSEL T1CON
+        BCF     T1CON, TMR1ON
+        ;; Reset the timer
+        BANKSEL FREQH
+        MOVFW   FREQH
+        BANKSEL TMR1H
+        MOVWF   TMR1H
+        BANKSEL FREQL
+        MOVFW   FREQL
+        BANKSEL TMR1L
+        MOVWF   TMR1L
+        ;; Enable timer1
+        BANKSEL T1CON
+        BSF     T1CON, TMR1ON
+        RETFIE
+ISR_VEC_MODTIM_END:
+        BANKSEL PIR5
+        BTFSS   PIR5, TMR3IF
+        GOTO    ISR_VEC_DURTIM_END
+        BCF     PIR5, TMR3IF
+        ;; Is the next note a rest?
+        BANKSEL NEXTFH
+        MOVFW   NEXTFH
+        BANKSEL NEXTFL
+        IORWF   NEXTFL, W
+        BTFSS   STATUS, Z
+        BRA     ISNOTE
+        ;; It's a rest.  Leave the transmitter on, but disable timer1.
+        BANKSEL T1CON
+        BCF     T1CON, TMR1ON
+        BANKSEL OSCTUNE
+        CLRF    OSCTUNE
+        BRA     NEXTLOADED
+ISNOTE:
+        ;; Load the next note
+        BANKSEL NEXTFH
+        MOVFW   NEXTFH
+        BANKSEL FREQH
+        MOVWF   FREQH
+        BANKSEL NEXTFL
+        MOVFW   NEXTFL
+        BANKSEL FREQL
+        MOVWF   FREQL
+	;; Disable timer1.
+        BANKSEL T1CON
+        BSF     T1CON, TMR1ON
+NEXTLOADED:     
+        ;; Disable timer3
+        BANKSEL T3CON
+        BCF     T3CON, TMR3ON
+        ;; Reset the timer
+        BANKSEL NEXTDH
+        MOVFW   NEXTDH
+        BANKSEL TMR3H
+        MOVWF   TMR3H
+        BANKSEL NEXTDL
+        MOVFW   NEXTDL
+        BANKSEL TMR3L
+        MOVWF   TMR3L
+        ;; Enable timer3
+        BANKSEL T3CON
+        BSF     T3CON, TMR3ON
+        ;; Toggle the note progress LED
+	BANKSEL LATA
+        MOVLW   h'20'
+        XORWF   LATA, F
+        ;; Inform the main loop that we need the next note
+        BANKSEL NEXTRDY
+        CLRF    NEXTRDY
+        RETFIE
+ISR_VEC_DURTIM_END:
         RETFIE
 
 ;;; 
@@ -40,73 +125,19 @@ ISR_VEC CODE    0x0004
 ;;; 
 
         UDATA
-PLAYI   RES	1
-DELAYI  RES     1
-PLAYCNT RES     1
-DELAYCNT RES    1
-SMDELAYCNT EQU 0x20
+NEXTDH  RES     1
+NEXTDL  RES     1
+NEXTFH  RES     1
+NEXTFL  RES     1
+NEXTRDY RES     1
+FREQH   RES     1
+FREQL   RES     1
 
 ;;;
 ;;; Code
 ;;;
         
 	CODE	; Linker-chosen address for .code
-	
-	;; DELAYSM: Do a quick delay loop
-DELAYSM:
-        MOVLW   SMDELAYCNT
-        PAGESEL DELAYSM_LOOP
-DELAYSM_LOOP:
-	;; Insert NOPs here to slow this own a bit
-        DECFSZ  WREG, F
-	GOTO    DELAYSM_LOOP
-	RETURN
-
-	;; DELAY: Delay for somewhat longer than DELAYSM.  This is
-	;; tuned to progress through the sine wave at the right speed.
-DELAY:
-        BANKSEL DELAYCNT
-        MOVFW   DELAYCNT
-        BANKSEL DELAYI
-        MOVWF   DELAYI
-DELAY_LOOP:
-        PAGESEL DELAYSM
-        CALL    DELAYSM
-        PAGESEL DELAY_LOOP
-        DECFSZ  DELAYI, F
-	GOTO    DELAY_LOOP
-	RETURN
-
-	;; Play a note
-PLAY:
-        BANKSEL PLAYCNT
-        MOVFW   PLAYCNT
-        BANKSEL PLAYI
-        MOVWF   PLAYI
-PLAYLOOP:
-        MOVLW   1
-        BANKSEL OSCTUNE
-        XORWF   OSCTUNE, F
-	CALL    DELAY
-
-        ;; Toggle RC2, so we can check the modulation frequency
-        ;; on an oscilloscope more easily.  You can put a speaker on
-	;; this if you want to hear the frequency (down an octave).
-	BANKSEL	LATC
-	MOVLW	4
-        XORWF	LATC, F
-	
-        PAGESEL DELAY
-        CALL    DELAY
-	
-        PAGESEL PLAYLOOP
-        BANKSEL PLAYI
-        DECFSZ  PLAYI, F
-        GOTO    PLAYLOOP
-        BANKSEL OSCTUNE
-        CLRF    OSCTUNE
-	RETURN
-
 START:   
         ;; Set the OSCCON register to engage the 32 MHz FOSC clock.
 	BANKSEL	OSCCON
@@ -195,31 +226,104 @@ START:
 	BANKSEL TRISA
         BCF     TRISA, TRISA5
 	
-        ;; Initialize the sound
-        BANKSEL PLAYCNT
-        MOVLW   0x80
-        MOVWF   PLAYCNT
-        BANKSEL DELAYCNT
-        MOVLW   0x40
-        MOVWF   DELAYCNT
+        ;; Initialize the interrupt handler
+        BANKSEL PIE1
+        BSF     PIE1, TMR1IE
+        BSF     PIE5, TMR3IE
+        BANKSEL INTCON
+        BSF     INTCON, PEIE
+        BSF     INTCON, GIE
+	
+        ;; Prepare timer1 (modulation half-period)
+	BANKSEL T1CON
+        MOVLW   b'01110000'
+        MOVWF   T1CON
+        BANKSEL T1GCON
+        BCF     T1GCON, TMR1GE
+        ;; Load timer1's initial values
+        BANKSEL TMR1H
+        MOVLW   0xee
+        MOVWF   TMR1H
+        BANKSEL TMR1L
+        MOVLW   0x3f
+        MOVWF   TMR1L
+	
+        ;; Prepare timer3 (duration)
+	BANKSEL T3CON
+        MOVLW   b'11110000'
+        MOVWF   T3CON
+        BANKSEL T3GCON
+        BCF     T3GCON, TMR3GE
+        ;; Load timer3's initial values
+        BANKSEL TMR3H
+        MOVLW   0xFF
+        MOVWF   TMR3H
+        BANKSEL TMR3L
+        MOVLW   0x00
+        MOVWF   TMR3L
+	
+        ;; Load the next note values
+        BANKSEL NEXTFH
+        MOVLW   0xee
+        MOVWF   NEXTFH
+        BANKSEL NEXTFL
+        MOVLW   0x3f
+        MOVWF   NEXTFL
+        BANKSEL NEXTDH
+        MOVLW   0xff
+        MOVWF   NEXTDH
+        BANKSEL NEXTDL
+        MOVLW   0x00
+        MOVWF   NEXTDL
+	BANKSEL NEXTRDY
+        BSF     NEXTRDY, 0
+	
+        ;; Enable timer1
+        BANKSEL T1CON
+        BSF     T1CON, TMR1ON
+        ;; Enable timer3
+        BANKSEL T3CON
+        BSF     T3CON, TMR3ON
+
+	;; Enable the note progress LED
+	BANKSEL LATA
+        BSF     LATA, LATA5
 
 MAINLOOP:
-	
-        BANKSEL LATA
-        BSF     LATA, LATA5
-        PAGESEL PLAY
-	CALL	PLAY
-        BANKSEL LATA
-        BCF     LATA, LATA5
-        PAGESEL PLAY
-	CALL	PLAY
-        PAGESEL MAINLOOP
-        BANKSEL DELAYCNT
-	DECFSZ  DELAYCNT
-        GOTO    MAINLOOP
-        MOVLW   0x40
-        MOVWF   DELAYCNT
-        GOTO    MAINLOOP
+PLAYLOW:
+	BANKSEL NEXTRDY
+        PAGESEL PLAYLOW
+        BTFSC   NEXTRDY, 0
+	GOTO    PLAYLOW
+
+        BANKSEL NEXTFH
+        MOVLW   0xdc
+        MOVWF   NEXTFH
+        BANKSEL NEXTFL
+        MOVLW   0x7e
+        MOVWF   NEXTFL
+        DECF    NEXTDH
+	BANKSEL NEXTRDY
+        BSF     NEXTRDY, 0
+
+PLAYHIGH:
+	BANKSEL NEXTRDY
+        PAGESEL PLAYHIGH
+        BTFSC   NEXTRDY, 0
+	GOTO    PLAYHIGH
+
+        BANKSEL NEXTFH
+        MOVLW   0x00
+        MOVWF   NEXTFH
+        BANKSEL NEXTFL
+        MOVLW   0x00
+        MOVWF   NEXTFL
+        DECF    NEXTDH
+	BANKSEL NEXTRDY
+        BSF     NEXTRDY, 0
+
+	PAGESEL PLAYLOW
+        GOTO    PLAYLOW
 
         END
 
