@@ -79,11 +79,12 @@ ISR_VEC_MODTIM_END:
         BRA     ISNOTE
         ;; It's a rest.  Turn timer1 off, and reset to the carrier.
         BANKSEL T1CON
-        BCF     T1CON, TMR1IF
-        BANKSEL PIR1
-        BCF     PIR1, TMR1IF
+        BCF     T1CON, TMR1ON
         BANKSEL OSCTUNE
         CLRF    OSCTUNE
+	;; Make sure we don't have a timer interrupt pending.
+        BANKSEL PIR1
+        BCF     PIR1, TMR1IF
         ;; Turn off the "playing a note" LED
         BANKSEL LATA
         BCF     LATA, LATA2
@@ -101,8 +102,6 @@ ISNOTE:
 	;; Enable timer1.
         BANKSEL T1CON
         BSF     T1CON, TMR1ON
-        BANKSEL PIR1
-        BSF     PIR1, TMR1IF
         ;; Turn on the "playing a note" LED
         BANKSEL LATA
         BSF     LATA, LATA2
@@ -375,6 +374,13 @@ NOT_NOTEDURENC_OCTDN:
 	BANKSEL NEXTFL
         MOVWF   NEXTFL
 	
+        BANKSEL NEXTFH
+        MOVF    NEXTFH, W
+        BANKSEL NEXTFL
+        IORWF   NEXTFL, W
+        BTFSC   STATUS, Z
+        BRA     ISREST
+	
 	;; Shift the note value based on the octave.
         BANKSEL OCTAVE
         MOVF    OCTAVE, W
@@ -397,6 +403,7 @@ OCTAVE_DONE:
 	BANKSEL NEXTFL
 	COMF	NEXTFL, F
     
+ISREST:
         ;; Decode the duration.
         PAGESEL DURDECHI
         MOVLW   DURDECHI
@@ -426,6 +433,7 @@ OCTAVE_DONE:
         MOVWF   NEXTRDY
         PAGESEL MAINLOOP
 NOTE_WAIT:
+	SLEEP
         BTFSS   NEXTRDY, 0
 	GOTO    MAINLOOP
         BRA     NOTE_WAIT
