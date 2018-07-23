@@ -158,8 +158,8 @@ note_tmr_if_bit:        equ     TMR3IF
 note_tmr_con_reg:       equ     T3CON
 note_tmr_gcon_reg:      equ     T3GCON
 note_tmr_ge_bit:        equ     TMR3GE
-mod_tmr_hi:             equ     TMR3H
-mod_tmr_lo:             equ     TMR3L
+note_tmr_hi:            equ     TMR3H
+note_tmr_lo:            equ     TMR3L
 	
 ;;;
 ;;; Other constants
